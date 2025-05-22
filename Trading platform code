@@ -1,0 +1,1080 @@
+import tkinter as tk # GUI PYTHON LIBRARY
+from tkinter import ttk, messagebox, StringVar # GUI COMPONENTS
+import os # OPERATING SYSTEM LIBRARY
+from dotenv import load_dotenv # LOAD ENV VARIABLES
+import requests # HTTP REQUESTS
+import pandas as pd # DATA MANIPULATION
+from datetime import datetime, timedelta # DATE AND TIME MANIPULATION
+import json # JSON MANIPULATION
+import urllib.parse # URL PARSING
+import base64 # ENCODING AND DECODING
+import time # TIME MANIPULATION
+import webbrowser # OPEN BROWSERS
+from urllib.parse import quote_plus # URL ENCODING
+import configparser # CONFIG PARSER
+
+class SchwabTraderGUI:
+    def __init__(self, root):
+        """Initialize the application"""
+        self.root = root
+        self.root.title("Schwab API Trading Interface") # this is the title of the window
+        self.root.geometry("900x700") # this is the size of the window
+        self.root.minsize(800, 600) # this is the minimum size of the window
+        
+        # Application variables
+        self.token = None # this is the token for the user
+        self.token_expiry = None # this is the expiry date of the token
+        self.refresh_token = None # this is the refresh token for the user
+        self.api_key = None # this is the api key for the user
+        self.api_secret = None # this is the api secret for the user
+        self.accountId = None # Store the retrieved account ID here
+        
+        # Schwab API URLs
+        self.base_url = "https://api.schwabapi.com/trader/v1"  # Base API URL for Trader endpoints
+        self.market_data_url = "https://api.schwabapi.com/marketdata/v1"  # Market data URL
+        
+        # Load saved settings if available
+        self.load_settings() # this is the function that loads the settings from the config file
+        
+        # Create main frames
+        self.create_frames() # this is the function that creates the main frames
+        
+        # Show login frame by default
+        self.show_login_frame() # this is the function that shows the login frame
+
+    def load_settings(self):
+        """Load saved settings from config file"""
+        try:
+            config = configparser.ConfigParser() # this is the config parser    
+            
+            # Check if config file exists
+            if os.path.exists('schwab_config.ini'): # this is the path to the config file
+                config.read('schwab_config.ini') # this is the function that reads the config file
+                
+                # Load URLs
+                if 'API' in config: # this is the section in the config file
+                    self.base_url = config['API'].get('base_url', self.base_url) # this is the base url
+                    self.market_data_url = config['API'].get('market_data_url', self.market_data_url) # this is the market data url
+                    
+                # Log the loaded settings
+                print(f"Loaded base URL: {self.base_url}") # this is the base url
+                print(f"Loaded market data URL: {self.market_data_url}") # this is the market data url
+        except Exception as e:
+            print(f"Error loading settings: {str(e)}")
+            
+    def save_settings(self):
+        """Save current settings to config file"""
+        try:
+            config = configparser.ConfigParser()
+            
+            # API Settings
+            config['API'] = {
+                'base_url': self.base_url,
+                'market_data_url': self.market_data_url
+            }
+            
+            # Write to file
+            with open('schwab_config.ini', 'w') as configfile:
+                config.write(configfile)
+                
+            print("Settings saved successfully")
+        except Exception as e:
+            print(f"Error saving settings: {str(e)}")
+
+    def create_login_frame(self):
+        """Create the login frame"""
+        self.login_frame = ttk.Frame(self.root)
+        
+        # App title
+        ttk.Label(self.login_frame, text="Schwab API Trading Interface", 
+                 font=('Helvetica', 16, 'bold')).pack(pady=20)
+        
+        # Authentication mode selection
+        auth_mode_frame = ttk.LabelFrame(self.login_frame, text="Authentication Method", padding=10)
+        auth_mode_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        self.auth_mode = StringVar()
+        self.auth_mode.set("oauth")  # Default to OAuth
+        
+        ttk.Radiobutton(auth_mode_frame, text="OAuth 2.0 Authorization Code Flow", 
+                       variable=self.auth_mode, value="oauth", 
+                       command=self.update_login_fields).pack(anchor=tk.W, pady=5)
+                       
+        ttk.Radiobutton(auth_mode_frame, text="Direct Token Entry", 
+                       variable=self.auth_mode, value="direct", 
+                       command=self.update_login_fields).pack(anchor=tk.W, pady=5)
+        
+        # Login fields container (will be populated by update_login_fields)
+        self.login_fields_frame = ttk.Frame(self.login_frame)
+        self.login_fields_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Buttons frame
+        buttons_frame = ttk.Frame(self.login_frame)
+        buttons_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Login button
+        self.login_button = ttk.Button(buttons_frame, text="Login", command=self.handle_login)
+        self.login_button.pack(side=tk.LEFT, padx=5)
+        
+        # API Settings button
+        self.api_settings_button = ttk.Button(buttons_frame, text="API Settings", 
+                                             command=self.show_api_selection_frame)
+        self.api_settings_button.pack(side=tk.LEFT, padx=5)
+        
+        # Help text for users
+        help_frame = ttk.LabelFrame(self.login_frame, text="Schwab API Information", padding=10)
+        help_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        ttk.Label(help_frame, 
+                 text="• Schwab API requires OAuth 2.0 authorization code flow").pack(anchor=tk.W, pady=2)
+                 
+        ttk.Label(help_frame, 
+                 text="• You need a registered application on the Schwab Developer Portal").pack(anchor=tk.W, pady=2)
+                 
+        ttk.Label(help_frame, 
+                 text="• Market data access requires proper scopes and permissions").pack(anchor=tk.W, pady=2)
+                 
+        ttk.Label(help_frame, 
+                 text="• Account access requires signed Data Accessor Agreement").pack(anchor=tk.W, pady=2)
+        
+        # Initialize login fields
+        self.update_login_fields()
+
+    def create_trading_frame(self):
+        """Create the trading interface frame"""
+        self.trading_frame = ttk.Frame(self.root)
+        
+        # Top section with title and logout button
+        top_frame = ttk.Frame(self.trading_frame)
+        top_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        ttk.Label(top_frame, text="Schwab Trading Interface", 
+                 font=('Helvetica', 14, 'bold')).pack(side=tk.LEFT)
+                 
+        ttk.Button(top_frame, text="Logout", 
+                  command=self.show_login_frame).pack(side=tk.RIGHT)
+        
+        # Tabs for different functionality
+        tab_control = ttk.Notebook(self.trading_frame)
+        tab_control.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        # Stock lookup tab
+        quotes_tab = ttk.Frame(tab_control)
+        tab_control.add(quotes_tab, text="Stock Lookup")
+        
+        # Account info tab
+        account_tab = ttk.Frame(tab_control)
+        tab_control.add(account_tab, text="Account Info")
+        
+        # API Discovery tab
+        discovery_tab = ttk.Frame(tab_control)
+        tab_control.add(discovery_tab, text="API Discovery")
+        
+        # Settings tab
+        settings_tab = ttk.Frame(tab_control)
+        tab_control.add(settings_tab, text="Settings")
+        
+        # Configure Stock Lookup Tab
+        ttk.Label(quotes_tab, text="Enter Stock Symbol:").pack(anchor=tk.W, padx=10, pady=10)
+        
+        symbol_frame = ttk.Frame(quotes_tab)
+        symbol_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.symbol_entry = ttk.Entry(symbol_frame, width=15)
+        self.symbol_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(symbol_frame, text="Lookup", 
+                  command=self.lookup_stock).pack(side=tk.LEFT, padx=5)
+        
+        # Add a button to place a market buy order
+        self.buy_button = ttk.Button(symbol_frame, text="Place Market Buy 1 Share",
+                                  command=self.place_market_order, state=tk.DISABLED) # Start disabled
+        self.buy_button.pack(side=tk.LEFT, padx=5)
+        
+        # Configure Account Info Tab
+        ttk.Button(account_tab, text="View Account Information", 
+                  command=self.view_account_info).pack(anchor=tk.W, padx=10, pady=10)
+        
+        ttk.Label(account_tab, text="Note: Account access may require additional permissions").pack(anchor=tk.W, padx=10)
+        
+        # Configure API Discovery Tab
+        ttk.Button(discovery_tab, text="Auto-Discover API Endpoints", 
+                  command=self.auto_discover_endpoints).pack(anchor=tk.W, padx=10, pady=10)
+        
+        ttk.Label(discovery_tab, text="Tests available endpoints with your current token").pack(anchor=tk.W, padx=10)
+        
+        # Configure Settings Tab
+        url_frame = ttk.LabelFrame(settings_tab, text="API URLs", padding=10)
+        url_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        ttk.Label(url_frame, text="Base API URL:").grid(row=0, column=0, sticky='w', pady=5)
+        self.base_url_entry = ttk.Entry(url_frame, width=50)
+        self.base_url_entry.grid(row=0, column=1, pady=5, padx=5)
+        self.base_url_entry.insert(0, self.base_url)
+        
+        ttk.Label(url_frame, text="Market Data URL:").grid(row=1, column=0, sticky='w', pady=5)
+        self.market_data_url_entry = ttk.Entry(url_frame, width=50)
+        self.market_data_url_entry.grid(row=1, column=1, pady=5, padx=5)
+        self.market_data_url_entry.insert(0, self.market_data_url)
+        
+        ttk.Button(url_frame, text="Update URLs", 
+                  command=self.update_urls).grid(row=2, column=0, columnspan=2, pady=10)
+        
+        # Create a text widget for information display (shared across tabs)
+        info_frame = ttk.LabelFrame(self.trading_frame, text="Information Display")
+        info_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        self.info_text = tk.Text(info_frame, height=15, width=80, wrap=tk.WORD)
+        self.info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(info_frame, command=self.info_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+        self.info_text.config(yscrollcommand=scrollbar.set)
+        
+        # Welcome message
+        self.info_text.insert(tk.END, "Welcome to the Schwab Trading Interface\n\n")
+        self.info_text.insert(tk.END, "Select a tab above to get started:\n")
+        self.info_text.insert(tk.END, "• Stock Lookup - Get quotes for stocks\n")
+        self.info_text.insert(tk.END, "• Account Info - View your account details\n")
+        self.info_text.insert(tk.END, "• API Discovery - Test available API endpoints\n")
+        self.info_text.insert(tk.END, "• Settings - Configure API URLs\n\n")
+        
+    def update_urls(self):
+        """Update the API URLs"""
+        self.base_url = self.base_url_entry.get().strip()
+        self.market_data_url = self.market_data_url_entry.get().strip()
+        
+        # Save settings to config file
+        self.save_settings()
+        
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "API URLs updated successfully\n")
+        self.info_text.insert(tk.END, f"Base API URL: {self.base_url}\n")
+        self.info_text.insert(tk.END, f"Market Data URL: {self.market_data_url}\n")
+        
+        messagebox.showinfo("Success", "API URLs updated successfully")
+
+    def create_api_selection_frame(self):
+        """Create the API selection interface"""
+        self.api_frame = ttk.Frame(self.root)
+        
+        # Title
+        ttk.Label(self.api_frame, text="Schwab API Configuration", 
+                 font=('Helvetica', 16, 'bold')).pack(pady=20)
+        
+        # URL Configuration Frame
+        url_config_frame = ttk.LabelFrame(self.api_frame, text="API URLs", padding=10)
+        url_config_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        # Base URL
+        ttk.Label(url_config_frame, text="Base API URL:").grid(row=0, column=0, sticky='w', pady=5)
+        self.base_url_config = ttk.Entry(url_config_frame, width=50)
+        self.base_url_config.grid(row=0, column=1, pady=5, padx=5)
+        self.base_url_config.insert(0, self.base_url)
+        
+        # Market Data URL
+        ttk.Label(url_config_frame, text="Market Data URL:").grid(row=1, column=0, sticky='w', pady=5)
+        self.market_data_url_config = ttk.Entry(url_config_frame, width=50)
+        self.market_data_url_config.grid(row=1, column=1, pady=5, padx=5)
+        self.market_data_url_config.insert(0, self.market_data_url)
+        
+        # Buttons
+        buttons_frame = ttk.Frame(self.api_frame)
+        buttons_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        ttk.Button(buttons_frame, text="Save Configuration", 
+                  command=self.save_api_config).pack(side=tk.LEFT, padx=5)
+                  
+        ttk.Button(buttons_frame, text="Reset to Defaults", 
+                  command=self.reset_api_config).pack(side=tk.LEFT, padx=5)
+                  
+        ttk.Button(buttons_frame, text="Return to Login", 
+                  command=self.show_login_frame).pack(side=tk.LEFT, padx=5)
+        
+        # Information Frame
+        info_frame = ttk.LabelFrame(self.api_frame, text="Schwab API Information", padding=10)
+        info_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        info_text = tk.Text(info_frame, height=10, width=60, wrap=tk.WORD)
+        info_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        info_text.insert(tk.END, "Schwab API URLs:\n\n")
+        info_text.insert(tk.END, "Production Environment:\n")
+        info_text.insert(tk.END, "• Base URL: https://api.schwabapi.com/v1\n")
+        info_text.insert(tk.END, "• Market Data URL: https://api.schwabapi.com/marketdata/v1\n\n")
+        info_text.insert(tk.END, "The authorization flow requires a registered application in the Schwab Developer Portal.\n")
+        info_text.config(state=tk.DISABLED)
+        
+    def save_api_config(self):
+        """Save the API configuration"""
+        self.base_url = self.base_url_config.get().strip()
+        self.market_data_url = self.market_data_url_config.get().strip()
+        
+        # Save settings to config file
+        self.save_settings()
+        
+        messagebox.showinfo("Success", "API configuration saved successfully")
+        self.show_login_frame()
+        
+    def reset_api_config(self):
+        """Reset API configuration to defaults"""
+        self.base_url = "https://api.schwabapi.com/trader/v1"
+        self.market_data_url = "https://api.schwabapi.com/marketdata/v1"
+        
+        self.base_url_config.delete(0, tk.END)
+        self.base_url_config.insert(0, self.base_url)
+        
+        self.market_data_url_config.delete(0, tk.END)
+        self.market_data_url_config.insert(0, self.market_data_url)
+        
+        # Save settings to config file
+        self.save_settings()
+        
+        messagebox.showinfo("Success", "API configuration reset to defaults")
+
+    def create_frames(self):
+        """Create all application frames"""
+        # Style configuration
+        self.style = ttk.Style()
+        self.style.configure('TLabel', padding=5, font=('Helvetica', 10))
+        self.style.configure('TButton', padding=5, font=('Helvetica', 10))
+        self.style.configure('TEntry', padding=5)
+        
+        # Create all main frames
+        self.create_login_frame()
+        self.create_trading_frame()
+        self.create_api_selection_frame()
+        
+    def show_login_frame(self):
+        """Show the login frame and hide others"""
+        self.api_frame.pack_forget()
+        self.trading_frame.pack_forget()
+        self.login_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+    def show_trading_frame(self):
+        """Show the trading frame and hide others"""
+        self.api_frame.pack_forget()
+        self.login_frame.pack_forget()
+        self.trading_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+    def show_api_selection_frame(self):
+        """Show the API selection frame and hide others"""
+        self.login_frame.pack_forget()
+        self.trading_frame.pack_forget()
+        self.api_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+    def update_login_fields(self):
+        """Update login fields based on selected authentication method"""
+        # Clear existing widgets
+        for widget in self.login_fields_frame.winfo_children():
+            widget.destroy()
+            
+        auth_mode = self.auth_mode.get()
+        
+        if auth_mode == "oauth":
+            # OAuth 2.0 fields
+            ttk.Label(self.login_fields_frame, text="Client ID:").grid(row=0, column=0, sticky='e', pady=5)
+            self.api_key_entry = ttk.Entry(self.login_fields_frame, width=40)
+            self.api_key_entry.grid(row=0, column=1, pady=5, padx=5)
+            
+            ttk.Label(self.login_fields_frame, text="Client Secret:").grid(row=1, column=0, sticky='e', pady=5)
+            self.api_secret_entry = ttk.Entry(self.login_fields_frame, width=40, show="*")
+            self.api_secret_entry.grid(row=1, column=1, pady=5, padx=5)
+            
+            ttk.Label(self.login_fields_frame, text="Redirect URI:").grid(row=2, column=0, sticky='e', pady=5)
+            self.redirect_uri_entry = ttk.Entry(self.login_fields_frame, width=40)
+            self.redirect_uri_entry.grid(row=2, column=1, pady=5, padx=5)
+            self.redirect_uri_entry.insert(0, "https://127.0.0.1")
+            
+            ttk.Button(self.login_fields_frame, text="Start Authorization Flow", 
+                      command=self.start_auth_flow).grid(row=3, column=0, columnspan=2, pady=10)
+                      
+            ttk.Label(self.login_fields_frame, text="Authorization Code:").grid(row=4, column=0, sticky='e', pady=5)
+            self.auth_code_entry = ttk.Entry(self.login_fields_frame, width=40)
+            self.auth_code_entry.grid(row=4, column=1, pady=5, padx=5)
+            
+        elif auth_mode == "direct":
+            # Direct token entry for advanced users
+            ttk.Label(self.login_fields_frame, text="Direct Access Token:").grid(row=0, column=0, sticky='e', pady=5)
+            self.token_entry = ttk.Entry(self.login_fields_frame, width=40)
+            self.token_entry.grid(row=0, column=1, pady=5, padx=5)
+            
+            ttk.Label(self.login_fields_frame, text="Refresh Token (optional):").grid(row=1, column=0, sticky='e', pady=5)
+            self.refresh_token_entry = ttk.Entry(self.login_fields_frame, width=40)
+            self.refresh_token_entry.grid(row=1, column=1, pady=5, padx=5)
+            
+            ttk.Label(self.login_fields_frame, text="Token Expiry (minutes):").grid(row=2, column=0, sticky='e', pady=5)
+            self.token_expiry_entry = ttk.Entry(self.login_fields_frame, width=10)
+            self.token_expiry_entry.grid(row=2, column=1, sticky='w', pady=5, padx=5)
+            self.token_expiry_entry.insert(0, "30")  # Default 30 minutes per Schwab docs
+            
+            ttk.Label(self.login_fields_frame, 
+                     text="Note: Use this if you obtained a token through another method").grid(
+                     row=3, column=0, columnspan=2, pady=5)
+    
+    def start_auth_flow(self):
+        """Start the OAuth 2.0 authorization flow by opening browser"""
+        client_id = self.api_key_entry.get().strip()
+        redirect_uri = self.redirect_uri_entry.get().strip()
+        
+        if not client_id or not redirect_uri:
+            messagebox.showerror("Error", "Please enter your Client ID and Redirect URI")
+            return
+            
+        # Generate a random state parameter for security
+        state = base64.b64encode(os.urandom(16)).decode('utf-8')
+        
+        # Define required scopes for Schwab API
+        scopes = [
+            "trading",
+            "market_data",
+            "account_info"
+        ]
+        scope_string = " ".join(scopes)
+        
+        # Construct the authorization URL with all required parameters
+        auth_params = {
+            'client_id': client_id,
+            'redirect_uri': redirect_uri,
+            'response_type': 'code',
+            'scope': scope_string,
+            'state': state
+        }
+        
+        auth_url = f"{self.base_url}/oauth/authorize?{urllib.parse.urlencode(auth_params)}"
+        
+        # Display instructions
+        msg = """
+1. Your browser will open to Schwab's authorization page
+2. Log in with your Schwab credentials
+3. Authorize the app access
+4. You'll be redirected to a page
+5. Look for the 'code' parameter in the URL (it will look like: ?code=XXXXX)
+6. Copy the entire code value
+7. Paste that code in the Authorization Code field
+8. Click the Login button to complete the process
+
+Note: If you get a 404 error after authorization, that's normal - just copy the code from the URL.
+        """
+        messagebox.showinfo("Authorization Instructions", msg)
+        
+        # Open browser to the authorization URL
+        webbrowser.open(auth_url)
+    
+    def handle_login(self):
+        """Handle login attempt"""
+        auth_mode = self.auth_mode.get()
+        
+        if auth_mode == "direct":
+            # Direct token login
+            token = self.token_entry.get().strip()
+            if not token:
+                messagebox.showerror("Error", "Please enter an access token")
+                return
+                
+            try:
+                # Get expiry time in minutes, convert to seconds
+                expiry_mins = int(self.token_expiry_entry.get().strip() or "30") 
+                self.token = token
+                self.token_expiry = time.time() + (expiry_mins * 60)
+                
+                # Store refresh token if provided
+                self.refresh_token = self.refresh_token_entry.get().strip() if hasattr(self, 'refresh_token_entry') else None
+                
+                if hasattr(self, 'info_text'):
+                    self.info_text.delete(1.0, tk.END)
+                    self.info_text.insert(tk.END, "Using provided access token\n")
+                    self.info_text.insert(tk.END, f"Token: {token[:10]}...\n")
+                    self.info_text.insert(tk.END, f"Expiry set to: {expiry_mins} minutes from now\n")
+                    if self.refresh_token:
+                        self.info_text.insert(tk.END, f"Refresh token stored: {self.refresh_token[:10]}...\n")
+                
+                messagebox.showinfo("Success", "Token accepted")
+                self.show_trading_frame()
+                return
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to process token: {str(e)}")
+                return
+        
+        # Authorization Code OAuth flow
+        auth_code = self.auth_code_entry.get().strip() if hasattr(self, 'auth_code_entry') else None
+        api_key = self.api_key_entry.get().strip()
+        api_secret = self.api_secret_entry.get().strip()
+        redirect_uri = self.redirect_uri_entry.get().strip() if hasattr(self, 'redirect_uri_entry') else None
+        
+        if not auth_code:
+            messagebox.showerror("Error", "Please enter the authorization code from the redirect URL")
+            return
+            
+        if not api_key or not api_secret or not redirect_uri:
+            messagebox.showerror("Error", "Please enter your Client ID, Client Secret, and Redirect URI")
+            return
+        
+        # Clear debug area first
+        if hasattr(self, 'info_text'):
+            self.info_text.delete(1.0, tk.END)
+            self.info_text.insert(tk.END, "Exchanging authorization code for tokens...\n")
+            
+        try:
+            # Decode the authorization code in case it contains URL-encoded characters (e.g., %40 -> @)
+            import urllib.parse
+            auth_code = urllib.parse.unquote(auth_code)
+            print(f"DEBUG: auth_code being sent: '{auth_code}'")
+            print(f"DEBUG: redirect_uri being sent: '{redirect_uri}'")
+
+            # Create the Basic auth header
+            auth_string = f"{api_key}:{api_secret}"
+            encoded_auth = base64.b64encode(auth_string.encode()).decode()
+            headers = {
+                'Authorization': f'Basic {encoded_auth}',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+
+            # Prepare the token request data
+            data = {
+                'grant_type': 'authorization_code',
+                'code': auth_code,
+                'redirect_uri': redirect_uri
+            }
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.insert(tk.END, "Sending token request...\n")
+            
+            # Exchange the authorization code for tokens
+            token_url = f"{self.base_url}/oauth/token"
+            response = requests.post(
+                token_url,
+                headers=headers,
+                data=urllib.parse.urlencode(data),
+                timeout=15
+            )
+            
+            if hasattr(self, 'info_text'):
+                self.info_text.insert(tk.END, f"Response status: {response.status_code}\n")
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                
+                # Extract tokens
+                self.token = token_data.get('access_token')
+                self.refresh_token = token_data.get('refresh_token')
+                
+                # Parse expiry time
+                expires_in = int(token_data.get('expires_in', 1800))  # Default 30 minutes (1800 seconds)
+                self.token_expiry = time.time() + expires_in
+                
+                # Store credentials
+                self.api_key = api_key
+                self.api_secret = api_secret
+                
+                if hasattr(self, 'info_text'):
+                    self.info_text.insert(tk.END, "Authentication successful!\n")
+                    self.info_text.insert(tk.END, f"Access token: {self.token[:10]}...\n")
+                    self.info_text.insert(tk.END, f"Token expires in: {expires_in} seconds\n")
+                    self.info_text.insert(tk.END, f"Refresh token: {self.refresh_token[:10]}...\n")
+                
+                messagebox.showinfo("Success", "Authentication successful!")
+                self.show_trading_frame()
+            else:
+                error_message = f"Token exchange failed: {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_message += f" - {error_data.get('error_description', error_data)}"
+                except:
+                    error_message += f" - {response.text}"
+                
+                if hasattr(self, 'info_text'):
+                    self.info_text.insert(tk.END, f"Error: {error_message}\n")
+                
+                messagebox.showerror("Error", error_message)
+                
+        except Exception as e:
+            error_message = f"Authentication failed: {str(e)}"
+            if hasattr(self, 'info_text'):
+                self.info_text.insert(tk.END, f"Error: {error_message}\n")
+            messagebox.showerror("Error", error_message)
+                
+    def lookup_stock(self):
+        """Look up a stock symbol using the Schwab API"""
+        symbol = self.symbol_entry.get().strip().upper()
+        
+        if not symbol:
+            messagebox.showerror("Error", "Please enter a stock symbol")
+            return
+            
+        # Clear the results area
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, f"Looking up information for {symbol}...\n\n")
+        
+        # Try different endpoints for stock information
+        endpoints = [
+            f"quotes/{symbol}",
+            f"equities/quotes/{symbol}",
+            f"quotes?symbols={symbol}",
+            f"marketdata/quotes/{symbol}"
+        ]
+        
+        success = False
+        
+        for endpoint in endpoints:
+            self.info_text.insert(tk.END, f"Trying endpoint: {endpoint}\n")
+            
+            # Use the make_api_call method
+            if endpoint == f"quotes?symbols={symbol}":
+                response_data = self.make_api_call(endpoint, params={'symbols': symbol})
+            else:
+                response_data = self.make_api_call(endpoint)
+            
+            if response_data:
+                # Display the stock information
+                self.info_text.insert(tk.END, f"\nStock Information for {symbol}:\n")
+                self.info_text.insert(tk.END, "-" * 50 + "\n")
+                
+                # Format the JSON nicely for display
+                formatted_json = json.dumps(response_data, indent=2)
+                self.info_text.insert(tk.END, formatted_json)
+                
+                success = True
+                break
+        
+        if not success:
+            self.info_text.insert(tk.END, "\nFailed to retrieve stock information. Possible issues:\n")
+            self.info_text.insert(tk.END, "1. The stock symbol may be invalid\n")
+            self.info_text.insert(tk.END, "2. Your token may not have permission to access market data\n")
+            self.info_text.insert(tk.END, "3. The market data URL may be incorrect\n")
+            self.info_text.insert(tk.END, "4. Your app may not be fully authorized for API access\n")
+
+    def view_account_info(self):
+        """Retrieve and display account information"""
+        # Clear the info area
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "Retrieving account information...\n\n")
+
+        # Use the correct endpoint for getting linked account information
+        endpoints = [
+            "/accounts" # Correct endpoint found in Schwab documentation
+        ]
+
+        success = False
+
+        for endpoint in endpoints:
+            self.info_text.insert(tk.END, f"Trying endpoint: {endpoint}\n")
+
+            # Use the make_api_call method
+            # Adding debug print for account info calls
+            print(f"DEBUG: Attempting account info endpoint: {endpoint}")
+            response_data = self.make_api_call(endpoint)
+            print(f"DEBUG: Result for {endpoint}: {response_data is not None}") # Print if data was received
+
+            if response_data:
+                # Display the account information
+                self.info_text.insert(tk.END, f"\nAccount Information:\n")
+                self.info_text.insert(tk.END, "-" * 50 + "\n")
+
+                # Try to find the account ID and store it
+                if isinstance(response_data, list) and response_data:
+                    # Assuming the first account in the list is the target account
+                    first_account = response_data[0]
+                    if 'accountId' in first_account:
+                        self.accountId = first_account['accountId']
+                        self.info_text.insert(tk.END, f"Detected Account ID: {self.accountId}\n")
+                        # Enable the buy button now that we have an account ID
+                        self.buy_button.config(state=tk.NORMAL)
+                    elif 'securitiesAccount' in first_account and 'accountId' in first_account['securitiesAccount']:
+                        # Alternative structure for account ID
+                         self.accountId = first_account['securitiesAccount']['accountId']
+                         self.info_text.insert(tk.END, f"Detected Account ID (securitiesAccount): {self.accountId}\n")
+                         self.buy_button.config(state=tk.NORMAL)
+                    else:
+                         self.info_text.insert(tk.END, "Account ID not found in response.\n")
+                         self.accountId = None # Ensure accountId is None if not found
+                         self.buy_button.config(state=tk.DISABLED)
+
+                # Format the JSON nicely for display
+                formatted_json = json.dumps(response_data, indent=2)
+                self.info_text.insert(tk.END, formatted_json)
+
+                success = True
+                break
+
+        if not success:
+            self.info_text.insert(tk.END, "\nFailed to retrieve account information. Possible issues:\n")
+            # Keep the original possible issues message for now, as it's still relevant if the API call fails for other reasons
+            self.info_text.insert(tk.END, "1. Your token may not have permission to access account data\n")
+            self.info_text.insert(tk.END, "2. You may need to use 3-legged OAuth to access account data\n")
+            self.info_text.insert(tk.END, "3. Your API application may not be registered for account access\n")
+            self.info_text.insert(tk.END, "4. You may need to sign Schwab's Data Accessor Agreement\n")
+            self.info_text.insert(tk.END, "\nNote: Account data typically requires the full 3-legged OAuth flow\n")
+            self.info_text.insert(tk.END, "with specific permissions approved by the user.\n")
+
+    def auto_discover_endpoints(self):
+        """Auto-discover API endpoints that are accessible with the current token"""
+        # Clear the info area
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, "Auto-discovering API endpoints...\n\n")
+        self.info_text.insert(tk.END, f"Base URL: {self.base_url}\n")
+        self.info_text.insert(tk.END, f"Market Data URL: {self.market_data_url}\n\n")
+        
+        # Define paths to test
+        base_paths = [
+            # Account and user endpoints
+            "brokerage/accounts",
+            "customer/accounts",
+            "clients/current/accounts",
+            "trading/accounts",
+            "accounts",
+            "users",
+            "users/current",
+            "user/accounts",
+            "user/profile",
+            "customer/profile",
+            # OAuth endpoints
+            "oauth/userinfo",
+            # Other API discovery endpoints
+            "api-products",
+            "metadata"
+        ]
+        
+        # Market data paths
+        market_paths = [
+            "quotes",
+            "equities/quotes",
+            "marketdata/quotes",
+            "markets/quotes",
+            "instruments/equities",
+            "instruments",
+            "markets"
+        ]
+        
+        # Track successful endpoints
+        successful_endpoints = []
+        
+        # Test base URL endpoints
+        self.info_text.insert(tk.END, "Testing Base URL Endpoints:\n")
+        self.info_text.insert(tk.END, "-" * 50 + "\n")
+        
+        for path in base_paths:
+            # Try a test request
+            result = self.make_api_call(path)
+            
+            # Request was successful
+            if result is not None:
+                successful_endpoints.append(f"{self.base_url}/{path}")
+                self.info_text.insert(tk.END, f"✓ {path}: ACCESSIBLE\n")
+            else:
+                self.info_text.insert(tk.END, f"✗ {path}: Not accessible\n")
+                
+        # Test market data URL endpoints
+        self.info_text.insert(tk.END, "\nTesting Market Data URL Endpoints:\n")
+        self.info_text.insert(tk.END, "-" * 50 + "\n")
+        
+        for path in market_paths:
+            # Try a test request to market data endpoint
+            result = self.make_api_call(path)
+            
+            # Request was successful
+            if result is not None:
+                successful_endpoints.append(f"{self.market_data_url}/{path}")
+                self.info_text.insert(tk.END, f"✓ {path}: ACCESSIBLE\n")
+            else:
+                self.info_text.insert(tk.END, f"✗ {path}: Not accessible\n")
+                
+        # Summary
+        self.info_text.insert(tk.END, "\nEndpoint Discovery Summary:\n")
+        self.info_text.insert(tk.END, "-" * 50 + "\n")
+        
+        if not successful_endpoints:
+            self.info_text.insert(tk.END, "No accessible endpoints were found.\n")
+            self.info_text.insert(tk.END, "This suggests your token may have limited permissions or may be invalid.\n")
+            self.info_text.insert(tk.END, "For Schwab API access, you may need to use the 3-legged OAuth flow\n")
+            self.info_text.insert(tk.END, "and ensure your application has the necessary permissions.\n")
+        else:
+            self.info_text.insert(tk.END, f"Found {len(successful_endpoints)} accessible endpoints:\n")
+            for endpoint in successful_endpoints:
+                self.info_text.insert(tk.END, f"• {endpoint}\n")
+                
+            self.info_text.insert(tk.END, "\nYou can use these endpoints in your API calls.\n")
+            
+        # Token info
+        self.info_text.insert(tk.END, "\nToken Information:\n")
+        self.info_text.insert(tk.END, "-" * 50 + "\n")
+        self.info_text.insert(tk.END, f"Token (first 10 chars): {self.token[:10]}...\n")
+        
+        if hasattr(self, 'token_expiry'):
+            remaining_time = self.token_expiry - time.time()
+            self.info_text.insert(tk.END, f"Token expiry: {int(remaining_time)} seconds remaining\n")
+            
+        if hasattr(self, 'refresh_token') and self.refresh_token:
+            self.info_text.insert(tk.END, f"Refresh token: Available\n")
+        else:
+            self.info_text.insert(tk.END, f"Refresh token: Not available\n")
+
+    def get_auth_headers(self):
+        """Return authentication headers for API requests"""
+        # Assuming token is valid at this point (checked in make_api_call)
+        if not self.token:
+             # This case should ideally not happen if make_api_call checked token validity
+             print("DEBUG: get_auth_headers called with self.token is None.")
+             return None
+             
+        print(f"DEBUG: Inside get_auth_headers. Current token: {self.token[:10] + '...'}")
+        return {
+            'Authorization': f'Bearer {self.token}',
+            'Accept': 'application/json' # Accept is generally fine for GET
+        }
+
+    def make_api_call(self, endpoint, method="GET", params=None, data=None):
+        """Make an API call with token refresh handling
+        
+        Args:
+            endpoint: API endpoint to call (without base URL)
+            method: HTTP method (GET, POST, etc.)
+            params: URL parameters as dict
+            data: Request body data as dict
+        
+        Returns:
+            JSON response if successful, None otherwise
+        """
+        # Check if a full URL was provided
+        if endpoint.startswith("http"):
+            url = endpoint
+        # Check if this is a market data endpoint
+        elif any(kw in endpoint.lower() for kw in ["quotes", "market", "prices", "chart"]):
+            url = f"{self.market_data_url}/{endpoint.lstrip('/')}"
+        # Otherwise assume it's a base URL endpoint
+        else:
+            url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        
+        # Ensure token is valid - Only check here
+        if not self.refresh_token_if_needed():
+            # If token refresh/check fails, show login and return None
+            messagebox.showerror("Error", "Authentication token expired or invalid. Please log in again.")
+            self.show_login_frame()
+            return None
+        
+        # Get headers with current token (assume token is valid here)
+        headers = self.get_auth_headers()
+        
+        # Add Content-Type only for methods that typically have a body
+        if method.upper() in ["POST", "PUT", "PATCH"]:
+             headers['Content-Type'] = 'application/json'
+             
+        print(f"DEBUG: Making {method} request to: {url}")
+        print(f"DEBUG: Request Headers: {headers}")
+
+        try:
+            # if hasattr(self, 'info_text'): # Original debug print
+            #     self.info_text.insert(tk.END, f"Making {method} request to: {url}\n") # Original debug print
+                
+            # Make the request
+            response = None
+            if method.upper() == "GET":
+                response = requests.get(url, headers=headers, params=params, timeout=15)
+            elif method.upper() == "POST":
+                response = requests.post(url, headers=headers, json=data, timeout=15)
+            elif method.upper() == "PUT":
+                response = requests.put(url, headers=headers, json=data, timeout=15)
+            elif method.upper() == "DELETE":
+                response = requests.delete(url, headers=headers, timeout=15)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+                
+            # Log response details
+            if hasattr(self, 'info_text'):
+                self.info_text.insert(tk.END, f"Response status: {response.status_code}\n")
+            
+            if response.status_code == 200:
+                json_data = response.json()
+                return json_data
+            elif response.status_code == 401:
+                # Token might be invalid. Try refreshing and retrying the call once.
+                if hasattr(self, 'refresh_token') and self.refresh_token:
+                     # Store original request details
+                     original_request = {
+                         'endpoint': endpoint,
+                         'method': method,
+                         'params': params,
+                         'data': data
+                     }
+                     if self.refresh_access_token():
+                         # If refresh successful, retry the original API call
+                         if hasattr(self, 'info_text'):
+                             self.info_text.insert(tk.END, "Token refreshed, retrying API call...\n")
+                         return self.make_api_call(**original_request) # Retry the call with the new token
+                     else:
+                        # Refresh failed
+                        if hasattr(self, 'info_text'):
+                            self.info_text.insert(tk.END, "Token refresh failed after 401.\n")
+                
+                # If refresh failed or no refresh token or retry failed
+                self.info_text.insert(tk.END, "Authentication failed. Please log in again.\n") if hasattr(self, 'info_text') else None
+                messagebox.showerror("Error", "Authentication failed. Please log in again.")
+                self.show_login_frame()
+                return None
+            elif response.status_code == 400:
+                 print(f"DEBUG: Received 400 Bad Request. Full response text:\n{response.text}")
+                 error_msg = f"API request failed with status {response.status_code}"
+                 try:
+                     error_data = response.json()
+                     error_msg += f": {error_data}"
+                 except:
+                     error_msg += f": {response.text}"
+                     
+                 self.info_text.insert(tk.END, f"Error: {error_msg}\n") if hasattr(self, 'info_text') else None
+                 return None
+            else:
+                error_msg = f"API request failed with status {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_msg += f": {error_data}"
+                except:
+                    error_msg += f": {response.text}"
+                    
+                self.info_text.insert(tk.END, f"Error: {error_msg}\n") if hasattr(self, 'info_text') else None
+                return None
+
+        except Exception as e:
+            error_msg = f"API request error: {str(e)}"
+            self.info_text.insert(tk.END, f"Error: {error_msg}\n") if hasattr(self, 'info_text') else None
+            return None
+
+    def refresh_token_if_needed(self):
+        """Refresh the token if it's expired or close to expiring"""
+        # If no token or already expired
+        if not self.token or not self.token_expiry or time.time() > self.token_expiry:
+            # If we have a refresh token, try to use it
+            if hasattr(self, 'refresh_token') and self.refresh_token:
+                return self.refresh_access_token()
+            else:
+                messagebox.showerror("Error", "Authentication token expired. Please log in again.")
+                self.show_login_frame()
+                return False
+
+        # If token will expire soon (within 60 seconds)
+        if self.token_expiry and time.time() > (self.token_expiry - 60):
+            # If we have a refresh token, try to use it
+            if hasattr(self, 'refresh_token') and self.refresh_token:
+                return self.refresh_access_token()
+
+        # Token is still valid
+        return True
+
+    def refresh_access_token(self):
+        """Use the refresh token to get a new access token"""
+        if not hasattr(self, 'refresh_token') or not self.refresh_token:
+            return False
+
+        if not self.api_key or not self.api_secret:
+            return False
+
+        try:
+            # Create the Basic auth header
+            auth_string = f"{self.api_key}:{self.api_secret}"
+            encoded_auth = base64.b64encode(auth_string.encode()).decode()
+
+            headers = {
+                'Authorization': f'Basic {encoded_auth}',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+
+            # Prepare the refresh token request data
+            data = {
+                'grant_type': 'refresh_token',
+                'refresh_token': self.refresh_token
+            }
+
+            # Make the refresh token request
+            token_url = f"{self.base_url}/oauth/token"
+            response = requests.post(
+                token_url,
+                headers=headers,
+                data=urllib.parse.urlencode(data),
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                token_data = response.json()
+
+                # Update tokens
+                self.token = token_data.get('access_token')
+                self.refresh_token = token_data.get('refresh_token', self.refresh_token)
+
+                # Update expiry time
+                expires_in = int(token_data.get('expires_in', 1800))  # Default 30 minutes
+                self.token_expiry = time.time() + expires_in
+
+                if hasattr(self, 'info_text'):
+                    self.info_text.insert(tk.END, "Token refreshed successfully\n")
+
+                return True
+            else:
+                if hasattr(self, 'info_text'):
+                    self.info_text.insert(tk.END, f"Token refresh failed: {response.status_code} - {response.text}\n")
+                return False
+
+        except Exception as e:
+            if hasattr(self, 'info_text'):
+                self.info_text.insert(tk.END, f"Token refresh error: {str(e)}\n")
+            return False
+
+    def place_market_order(self):
+        """Place a market buy order for 1 share of the current symbol"""
+        symbol = self.symbol_entry.get().strip().upper()
+
+        if not hasattr(self, 'accountId') or not self.accountId:
+            messagebox.showerror("Error", "Account ID not available. Please view account information first.")
+            return
+
+        if not symbol:
+            messagebox.showerror("Error", "Please enter a stock symbol to buy.")
+            return
+
+        # Clear the results area
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, f"Placing market buy order for 1 share of {symbol} in account {self.accountId}...\n\n")
+
+        # Define the order payload (Schwab API v1 Order format example)
+        # NOTE: This is a basic example. Schwab API has detailed order specifications.
+        #       You might need to adjust based on specific API documentation for placing orders.
+        order_payload = {
+            "orderType": "MARKET",
+            "session": "SEAMLESS", # or "DAY", "AM", "PM"
+            "duration": "DAY",
+            "orderStrategyType": "SINGLE",
+            "orderLegCollection": [
+                {
+                    "instruction": "BUY",
+                    "quantity": 1,
+                    "instrument": {
+                        "symbol": symbol,
+                        "assetType": "EQUITY"
+                    }
+                }
+            ]
+        }
+
+        # Schwab API endpoint for placing orders
+        # The endpoint is typically POST /accounts/{accountId}/orders
+        order_endpoint = f"accounts/{self.accountId}/orders"
+
+        # Make the API call to place the order
+        response_data = self.make_api_call(order_endpoint, method="POST", data=order_payload)
+
+        # Handle the response
+        if response_data:
+            self.info_text.insert(tk.END, "Order placed successfully:\n")
+            formatted_json = json.dumps(response_data, indent=2)
+            self.info_text.insert(tk.END, formatted_json)
+        else:
+            self.info_text.insert(tk.END, "Failed to place order. Check the information display for details.\n")
+
+        # Refresh account info after attempting to place an order
+        self.view_account_info() # This will also refresh the holdings display
+
+def main():
+    root = tk.Tk()
+    app = SchwabTraderGUI(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
